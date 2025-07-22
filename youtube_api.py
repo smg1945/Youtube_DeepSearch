@@ -11,11 +11,24 @@ import statistics
 
 try:
     import yt_dlp
+    YT_DLP_AVAILABLE = True
+except ImportError:
+    YT_DLP_AVAILABLE = False
+    print("Warning: yt-dlp not installed. Audio download features will be limited.")
+
+try:
     import whisper
     WHISPER_AVAILABLE = True
+    print("INFO: Whisper available")
 except ImportError:
     WHISPER_AVAILABLE = False
-    print("Warning: yt-dlp or whisper not installed. Audio transcription will not be available.")
+    print("Warning: Whisper not installed. Speech recognition features will be limited.")
+except Exception as e:
+    WHISPER_AVAILABLE = False
+    print(f"Warning: Whisper loading error: {e}")
+    print("   Quick transcript extraction is still available (API quota free)")
+
+
 
 
 class YouTubeAPI:
@@ -336,7 +349,7 @@ class YouTubeAPI:
     
     def get_video_transcript(self, video_id, use_whisper=True, force_transcript_only=False):
         """
-        영상 대본 가져오기 - API 할당량 효율적 관리
+        순수한 대본 텍스트만 추출
         
         Args:
             video_id (str): YouTube 비디오 ID
@@ -344,7 +357,7 @@ class YouTubeAPI:
             force_transcript_only (bool): youtube-transcript-api만 사용 (할당량 절약)
             
         Returns:
-            str: 추출된 대본 또는 None
+            str: 순수한 대본 텍스트 또는 None
         """
         import time
         
@@ -356,47 +369,16 @@ class YouTubeAPI:
         try:
             # 1단계: YouTube 자막 시도 (할당량 사용 안 함)
             print(f"📝 YouTube 자막 추출 시도: {video_id}")
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            transcript = None
-            try:
-                # 한국어 자막 시도
-                transcript = transcript_list.find_transcript(['ko'])
-            except:
-                try:
-                    # 영어 자막 시도
-                    transcript = transcript_list.find_transcript(['en'])
-                except:
-                    try:
-                        # 자동생성 자막 시도
-                        transcript = transcript_list.find_generated_transcript(['ko'])
-                    except:
-                        try:
-                            transcript = transcript_list.find_generated_transcript(['en'])
-                        except:
-                            transcript = None
-            
-            if transcript:
-                transcript_data = transcript.fetch()
-                try:
-                    if isinstance(transcript_data, list):
-                        full_text = ' '.join([
-                            item.get('text', '') if isinstance(item, dict) else str(item) 
-                            for item in transcript_data
-                        ])
-                    else:
-                        full_text = str(transcript_data)
-                    
-                    if full_text.strip():
-                        print(f"✅ YouTube 자막으로 대본 추출 성공: {video_id}")
-                        return full_text.strip()
-                except Exception as text_error:
-                    print(f"자막 텍스트 처리 오류 ({video_id}): {text_error}")
+            clean_transcript = self._extract_clean_youtube_transcript(video_id)
+            if clean_transcript:
+                print(f"✅ YouTube 자막으로 대본 추출 성공: {video_id}")
+                return clean_transcript
             
             # force_transcript_only 모드면 Whisper 사용 안 함
             if force_transcript_only:
                 print(f"❌ 자막 없음 (Transcript-only 모드): {video_id}")
-                return "자막이 없는 영상입니다. (API 절약 모드)"
+                return None
             
             # API 제한을 피하기 위한 대기
             time.sleep(1)
@@ -419,9 +401,93 @@ class YouTubeAPI:
             else:
                 return None
     
+    def _extract_clean_youtube_transcript(self, video_id):
+        """
+        YouTube 자막에서 순수한 텍스트만 추출하는 새로운 함수
+        """
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # 우선순위: 수동 한국어 > 수동 영어 > 자동 한국어 > 자동 영어
+            language_priority = ['ko', 'en', 'ja', 'zh']
+            
+            # 1. 수동 자막 시도
+            for lang in language_priority:
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    if not transcript.is_generated:  # 수동 자막인지 확인
+                        clean_text = self._process_transcript_data(transcript.fetch())
+                        if clean_text and len(clean_text.strip()) > 50:  # 의미있는 길이인지 확인
+                            return clean_text
+                except:
+                    continue
+            
+            # 2. 자동 생성 자막 시도
+            for lang in language_priority:
+                try:
+                    transcript = transcript_list.find_generated_transcript([lang])
+                    clean_text = self._process_transcript_data(transcript.fetch())
+                    if clean_text and len(clean_text.strip()) > 50:
+                        return clean_text
+                except:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            print(f"YouTube 자막 추출 오류: {e}")
+            return None
+    
+    def _process_transcript_data(self, transcript_data):
+        """
+        자막 데이터에서 순수한 텍스트만 추출
+        """
+        if not transcript_data:
+            return None
+        
+        text_parts = []
+        
+        for item in transcript_data:
+            try:
+                # 다양한 형태의 자막 데이터 처리
+                text = None
+                
+                if isinstance(item, dict):
+                    # 딕셔너리 형태: {'text': '내용', 'start': 0.0, 'duration': 1.0}
+                    text = item.get('text', '')
+                elif hasattr(item, 'text'):
+                    # 객체 형태: FetchedTranscriptSnippet
+                    text = item.text
+                else:
+                    # 기타 형태
+                    text = str(item)
+                
+                if text and isinstance(text, str):
+                    # 텍스트 정리
+                    text = text.strip()
+                    if text and text not in ['', '[Music]', '[음악]', '[박수]', '[웃음]']:
+                        text_parts.append(text)
+                        
+            except Exception as item_error:
+                print(f"자막 항목 처리 오류: {item_error}")
+                continue
+        
+        if not text_parts:
+            return None
+        
+        # 텍스트 결합 및 정리
+        full_text = ' '.join(text_parts)
+        
+        # 불필요한 문자 정리
+        full_text = re.sub(r'\s+', ' ', full_text)  # 공백 정리
+        full_text = re.sub(r'[\r\n]+', ' ', full_text)  # 줄바꿈을 공백으로
+        full_text = full_text.strip()
+        
+        return full_text if full_text else None
+    
     def get_transcript_batch(self, video_ids, progress_callback=None):
         """
-        여러 영상의 대본을 효율적으로 일괄 추출
+        여러 영상의 순수 대본을 효율적으로 일괄 추출
         API 할당량을 사용하지 않는 youtube-transcript-api만 사용
         
         Args:
@@ -429,31 +495,43 @@ class YouTubeAPI:
             progress_callback (function): 진행상황 콜백
             
         Returns:
-            dict: {video_id: transcript} 형태
+            dict: {video_id: clean_transcript_text} 형태
         """
         results = {}
+        failed_videos = []
         total = len(video_ids)
         
-        print(f"📋 일괄 대본 추출 시작: {total}개 영상 (API 할당량 사용 안 함)")
+        print(f"📋 순수 대본 일괄 추출 시작: {total}개 영상")
         
         for i, video_id in enumerate(video_ids):
             if progress_callback:
-                progress_callback(f"대본 추출 중... ({i+1}/{total})")
+                progress_callback(f"순수 대본 추출 중... ({i+1}/{total})")
             
-            # transcript-only 모드로 추출 (할당량 절약)
-            transcript = self.get_video_transcript(video_id, use_whisper=False, force_transcript_only=True)
+            try:
+                # 새로운 순수 대본 추출 방식 사용
+                clean_transcript = self._extract_clean_youtube_transcript(video_id)
+                
+                if clean_transcript and len(clean_transcript.strip()) > 50:
+                    results[video_id] = clean_transcript
+                    print(f"✅ {i+1}/{total} 성공: {video_id} ({len(clean_transcript)}자)")
+                else:
+                    failed_videos.append(video_id)
+                    print(f"❌ {i+1}/{total} 실패: {video_id} (자막 없음)")
+                
+            except Exception as e:
+                failed_videos.append(video_id)
+                print(f"❌ {i+1}/{total} 오류: {video_id} - {str(e)}")
             
-            if transcript and "자막이 없는 영상입니다" not in transcript:
-                results[video_id] = transcript
-                print(f"✅ {i+1}/{total} 성공: {video_id}")
-            else:
-                print(f"❌ {i+1}/{total} 실패: {video_id}")
-            
-            # 요청 간격 조정
+            # 요청 간격 조정 (YouTube 서버 부하 방지)
             import time
-            time.sleep(0.3)
+            time.sleep(0.2)
         
-        print(f"🎉 일괄 추출 완료: {len(results)}/{total}개 성공")
+        success_count = len(results)
+        print(f"🎉 순수 대본 일괄 추출 완료: {success_count}/{total}개 성공")
+        
+        if failed_videos:
+            print(f"🔍 실패한 영상 ID들: {failed_videos[:5]}{'...' if len(failed_videos) > 5 else ''}")
+        
         return results
     
     def _extract_transcript_with_whisper_improved(self, video_id):

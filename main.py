@@ -324,11 +324,6 @@ class YouTubeDeepSearch:
                                            command=self.open_channel_analysis)
         channel_analysis_button.pack(side=tk.LEFT, padx=(0, 5))
         
-        # 빠른 대본 추출 버튼 추가
-        quick_extract_button = ttk.Button(button_frame, text="🚀 빠른 대본 추출", 
-                                        command=self.open_quick_transcript_extractor)
-        quick_extract_button.pack(side=tk.LEFT, padx=(0, 5))
-        
         # 선택된 영상 정보 레이블
         self.selected_info_label = ttk.Label(button_frame, text="영상을 선택해주세요")
         self.selected_info_label.pack(side=tk.LEFT, padx=(10, 0))
@@ -568,16 +563,6 @@ class YouTubeDeepSearch:
         
         # 채널 분석 창 생성
         analysis_window = ChannelAnalysisWindow(self.root, self.youtube_api, self.selected_video)
-    
-    def open_quick_transcript_extractor(self):
-        """빠른 대본 추출기 창 열기"""
-        try:
-            from quick_transcript_extractor import QuickTranscriptExtractor
-            QuickTranscriptExtractor(self.root)
-        except ImportError:
-            messagebox.showerror("모듈 오류", "빠른 대본 추출기 모듈을 찾을 수 없습니다.")
-        except Exception as e:
-            messagebox.showerror("오류", f"빠른 대본 추출기를 열 수 없습니다:\n{e}")
 
 
 class ChannelAnalysisWindow:
@@ -638,7 +623,6 @@ class ChannelAnalysisWindow:
         ttk.Button(button_frame, text="제목 추출", command=self.extract_titles).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="썸네일 추출", command=self.extract_thumbnails).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="대본 추출", command=self.extract_transcripts).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="🚀 빠른 대본", command=self.open_quick_extractor).pack(side=tk.LEFT, padx=(0, 5))
         
         # 상태 레이블
         self.status_label = ttk.Label(button_frame, text="채널 영상을 로드하는 중...")
@@ -972,20 +956,15 @@ class ChannelAnalysisWindow:
                                 print(f"오류 로그 작성 실패: {log_error}")
                     
                     # 완료 메시지
-                    quota_status = self.youtube_api.get_quota_status()
-                    
-                    message = f"🎉 대본 추출 완료!\n\n"
-                    message += f"📊 결과 요약:\n"
+                    message = f"대본 추출 완료!\n\n"
+                    message += f"결과 요약:\n"
                     message += f"• 성공: {extracted_count}/{len(selected_videos)}\n"
                     message += f"• 실패: {len(selected_videos) - extracted_count}/{len(selected_videos)}\n"
                     message += f"• 저장 위치: {folder_path}\n\n"
-                    message += f"📈 API 할당량 상태:\n"
-                    message += f"• 사용량: {quota_status['used']}/{quota_status['limit']} ({quota_status['percentage']:.1f}%)\n"
-                    message += f"• 남은 할당량: {quota_status['remaining']}\n\n"
-                    message += f"💡 참고사항:\n"
-                    message += f"• YouTube 자막이 없는 영상은 Whisper(AI 음성인식)로 처리됩니다\n"
-                    message += f"• 할당량 절약을 원하면 '🚀 빠른 대본' 버튼을 이용하세요!\n"
-                    message += f"• 일부 영상은 저작권 제한으로 처리되지 않을 수 있습니다"
+                    message += f"참고사항:\n"
+                    message += f"• YouTube 자막이 있는 영상만 추출됩니다\n"
+                    message += f"• 자막이 없는 영상은 건너뜁니다\n"
+                    message += f"• 대본 내용만 깔끔하게 저장됩니다"
                     def show_complete():
                         messagebox.showinfo("대본 추출 완료", message)
                     self.window.after(0, show_complete)
@@ -1013,16 +992,6 @@ class ChannelAnalysisWindow:
         except Exception as e:
             print(f"더블클릭 이벤트 오류: {e}")
             # 오류가 발생해도 계속 진행
-    
-    def open_quick_extractor(self):
-        """빠른 대본 추출기 열기"""
-        try:
-            from quick_transcript_extractor import QuickTranscriptExtractor
-            QuickTranscriptExtractor(self.window)
-        except ImportError:
-            messagebox.showerror("모듈 오류", "빠른 대본 추출기 모듈을 찾을 수 없습니다.")
-        except Exception as e:
-            messagebox.showerror("오류", f"빠른 대본 추출기를 열 수 없습니다:\n{e}")
 
 
 def main():
