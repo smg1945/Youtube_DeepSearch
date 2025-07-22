@@ -24,6 +24,11 @@ class YouTubeAPI:
         if self.api_key == "YOUR_YOUTUBE_API_KEY_HERE":
             raise ValueError("YouTube API 키를 config.py 파일에 설정해주세요.")
         
+        # API 할당량 추적
+        self.quota_used = 0
+        self.quota_limit = 10000  # 기본 일일 할당량
+        self.quota_warning_threshold = 8000  # 경고 임계값
+        
         # Whisper 모델을 클래스 변수로 저장 (한 번만 로드)
         self.whisper_model = None
         
@@ -36,6 +41,28 @@ class YouTubeAPI:
             )
         except Exception as e:
             raise ValueError(f"YouTube API 초기화 실패: {e}\nAPI 키가 올바른지 확인해주세요.")
+    
+    def check_quota_available(self, required_quota=1):
+        """API 할당량 사용 가능 여부 확인"""
+        return (self.quota_used + required_quota) <= self.quota_limit
+    
+    def use_quota(self, amount=1):
+        """할당량 사용 기록"""
+        self.quota_used += amount
+        
+        # 경고 임계값 체크
+        if self.quota_used >= self.quota_warning_threshold:
+            remaining = self.quota_limit - self.quota_used
+            print(f"⚠️ API 할당량 경고: {remaining}회 남음 ({self.quota_used}/{self.quota_limit})")
+    
+    def get_quota_status(self):
+        """현재 할당량 상태 반환"""
+        return {
+            'used': self.quota_used,
+            'limit': self.quota_limit,
+            'remaining': self.quota_limit - self.quota_used,
+            'percentage': (self.quota_used / self.quota_limit) * 100
+        }
     
     def search_videos(self, keyword, video_type="all", min_views=0, max_subscribers=None, 
                      upload_period=None, max_results=100, progress_callback=None):
@@ -307,12 +334,28 @@ class YouTubeAPI:
             print(f"채널 영상 가져오기 오류: {e}")
             return []
     
-    def get_video_transcript(self, video_id, use_whisper=True):
-        """영상 대본 가져오기 (YouTube 자막 우선, 없으면 Whisper로 추출)"""
+    def get_video_transcript(self, video_id, use_whisper=True, force_transcript_only=False):
+        """
+        영상 대본 가져오기 - API 할당량 효율적 관리
+        
+        Args:
+            video_id (str): YouTube 비디오 ID
+            use_whisper (bool): Whisper 사용 여부
+            force_transcript_only (bool): youtube-transcript-api만 사용 (할당량 절약)
+            
+        Returns:
+            str: 추출된 대본 또는 None
+        """
         import time
         
+        # API 할당량 부족 시 자동으로 transcript-only 모드 활성화
+        if not self.check_quota_available(1):
+            print(f"⚠️ API 할당량 부족! transcript-api만 사용합니다.")
+            force_transcript_only = True
+        
         try:
-            # 1단계: YouTube 자막 시도
+            # 1단계: YouTube 자막 시도 (할당량 사용 안 함)
+            print(f"📝 YouTube 자막 추출 시도: {video_id}")
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
             transcript = None
@@ -335,7 +378,6 @@ class YouTubeAPI:
             
             if transcript:
                 transcript_data = transcript.fetch()
-                # 안전한 텍스트 추출
                 try:
                     if isinstance(transcript_data, list):
                         full_text = ' '.join([
@@ -346,28 +388,73 @@ class YouTubeAPI:
                         full_text = str(transcript_data)
                     
                     if full_text.strip():
-                        print(f"YouTube 자막으로 대본 추출 성공: {video_id}")
+                        print(f"✅ YouTube 자막으로 대본 추출 성공: {video_id}")
                         return full_text.strip()
                 except Exception as text_error:
                     print(f"자막 텍스트 처리 오류 ({video_id}): {text_error}")
             
+            # force_transcript_only 모드면 Whisper 사용 안 함
+            if force_transcript_only:
+                print(f"❌ 자막 없음 (Transcript-only 모드): {video_id}")
+                return "자막이 없는 영상입니다. (API 절약 모드)"
+            
             # API 제한을 피하기 위한 대기
             time.sleep(1)
             
-            # 2단계: Whisper로 오디오 추출 후 대본 생성
+            # 2단계: Whisper로 오디오 추출 후 대본 생성 (할당량 사용 안 함)
             if use_whisper and WHISPER_AVAILABLE:
-                print(f"YouTube 자막이 없어 Whisper로 대본 추출 시도: {video_id}")
-                return self._extract_transcript_with_whisper_improved(video_id)
+                if self.check_quota_available(0):  # Whisper는 할당량 사용 안 함
+                    print(f"🎵 YouTube 자막이 없어 Whisper로 대본 추출 시도: {video_id}")
+                    return self._extract_transcript_with_whisper_improved(video_id)
+                else:
+                    print(f"⚠️ API 할당량 부족으로 Whisper 사용 제한: {video_id}")
             
             return None
             
         except Exception as e:
             print(f"대본 가져오기 오류 (Video ID: {video_id}): {e}")
-            if use_whisper and WHISPER_AVAILABLE:
-                print(f"오류 발생, Whisper로 재시도: {video_id}")
+            if use_whisper and WHISPER_AVAILABLE and not force_transcript_only:
+                print(f"🔄 오류 발생, Whisper로 재시도: {video_id}")
                 return self._extract_transcript_with_whisper_improved(video_id)
             else:
                 return None
+    
+    def get_transcript_batch(self, video_ids, progress_callback=None):
+        """
+        여러 영상의 대본을 효율적으로 일괄 추출
+        API 할당량을 사용하지 않는 youtube-transcript-api만 사용
+        
+        Args:
+            video_ids (list): 비디오 ID 목록
+            progress_callback (function): 진행상황 콜백
+            
+        Returns:
+            dict: {video_id: transcript} 형태
+        """
+        results = {}
+        total = len(video_ids)
+        
+        print(f"📋 일괄 대본 추출 시작: {total}개 영상 (API 할당량 사용 안 함)")
+        
+        for i, video_id in enumerate(video_ids):
+            if progress_callback:
+                progress_callback(f"대본 추출 중... ({i+1}/{total})")
+            
+            # transcript-only 모드로 추출 (할당량 절약)
+            transcript = self.get_video_transcript(video_id, use_whisper=False, force_transcript_only=True)
+            
+            if transcript and "자막이 없는 영상입니다" not in transcript:
+                results[video_id] = transcript
+                print(f"✅ {i+1}/{total} 성공: {video_id}")
+            else:
+                print(f"❌ {i+1}/{total} 실패: {video_id}")
+            
+            # 요청 간격 조정
+            import time
+            time.sleep(0.3)
+        
+        print(f"🎉 일괄 추출 완료: {len(results)}/{total}개 성공")
+        return results
     
     def _extract_transcript_with_whisper_improved(self, video_id):
         """개선된 yt-dlp와 Whisper를 사용한 대본 추출"""
