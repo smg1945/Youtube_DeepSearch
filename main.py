@@ -778,41 +778,60 @@ class ChannelAnalysisWindow:
         selected_videos = []
         checked_items = self.tree.get_checked_items()
         
-        for item in checked_items:
-            index = self.tree.get_children().index(item)
-            if index < len(self.channel_videos):
-                selected_videos.append(self.channel_videos[index])
+        try:
+            for item in checked_items:
+                # 트리에서 항목의 인덱스 찾기
+                all_children = list(self.tree.get_children())
+                if item in all_children:
+                    index = all_children.index(item)
+                    if 0 <= index < len(self.channel_videos):
+                        selected_videos.append(self.channel_videos[index])
+        except Exception as e:
+            print(f"선택된 영상 가져오기 오류: {e}")
         
         return selected_videos
     
     def extract_titles(self):
         """선택된 영상들의 제목 추출"""
-        selected_videos = self.get_selected_videos()
-        
-        if not selected_videos:
-            messagebox.showwarning("선택 오류", "추출할 영상을 선택해주세요.")
-            return
-        
-        # 파일 저장 대화상자
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-            title="제목 목록 저장"
-        )
-        
-        if file_path:
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    for i, video in enumerate(selected_videos, 1):
-                        f.write(f"{i}. {video['title']}\n")
-                        f.write(f"   URL: {video['url']}\n")
-                        f.write(f"   조회수: {self.format_number(video['view_count'])}\n")
-                        f.write(f"   게시일: {video['published_at'][:10]}\n\n")
+        try:
+            selected_videos = self.get_selected_videos()
+            
+            if not selected_videos:
+                messagebox.showwarning("선택 오류", "추출할 영상을 선택해주세요.")
+                return
+            
+            print(f"선택된 영상 수: {len(selected_videos)}")  # 디버깅용
+            
+            # 파일 저장 대화상자
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="제목 목록 저장"
+            )
+            
+            if file_path:
+                print(f"저장 경로: {file_path}")  # 디버깅용
                 
-                messagebox.showinfo("완료", f"제목 목록이 저장되었습니다.\n({len(selected_videos)}개 영상)")
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        for i, video in enumerate(selected_videos, 1):
+                            f.write(f"{i}. {video['title']}\n")
+                            f.write(f"   URL: {video['url']}\n")
+                            f.write(f"   조회수: {self.format_number(video['view_count'])}\n")
+                            f.write(f"   게시일: {video['published_at'][:10]}\n\n")
+                    
+                    print("파일 저장 완료")  # 디버깅용
+                    messagebox.showinfo("완료", f"제목 목록이 저장되었습니다.\n({len(selected_videos)}개 영상)")
+                    
+                except Exception as save_error:
+                    print(f"파일 저장 오류: {save_error}")
+                    messagebox.showerror("저장 오류", f"파일 저장 중 오류가 발생했습니다:\n{save_error}")
+            else:
+                print("파일 경로가 선택되지 않음")  # 디버깅용
                 
-            except Exception as e:
-                messagebox.showerror("저장 오류", f"파일 저장 중 오류가 발생했습니다:\n{e}")
+        except Exception as e:
+            print(f"제목 추출 전체 오류: {e}")
+            messagebox.showerror("오류", f"제목 추출 중 오류가 발생했습니다:\n{e}")
     
     def extract_thumbnails(self):
         """선택된 영상들의 썸네일 추출"""
